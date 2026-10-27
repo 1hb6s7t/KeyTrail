@@ -1,0 +1,14 @@
+KeyTrail / 键迹
+Copyright 2026 KeyTrail contributors.
+
+BongoCat — https://github.com/ayangweb/BongoCat
+Copyright 2025-present ayangweb.
+
+The C ABI declarations in Sources/KeyTrailPet/CubismModel.swift follow BongoCat
+bindings at revision b82b4750b776df1408db07d5858d37db1594c3f3 and were adapted
+to Swift for KeyTrail. The BongoCat application source uses Apache License 2.0.
+Third-party model assets and Live2D SDK components are excluded from this source
+distribution and are not relicensed by KeyTrail.
+
+The journal-keycaps.png artwork is project-generated UI artwork, separate from
+the optional BongoCat models. See THIRD_PARTY_NOTICES.md for component boundaries.

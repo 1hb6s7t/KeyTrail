@@ -1,0 +1,21 @@
+# Included in a user-owned nginx HTTPS server block with a valid private hostname
+# and certificate. Restrict access to your own VPN/LAN in the server/firewall.
+# TLS setup and certificate issuance remain owned by your deployment.
+client_max_body_size 2m;
+client_header_timeout 5s;
+client_body_timeout 5s;
+send_timeout 10s;
+location / {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Connection close;
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 15s;
+    # Do not persist API responses or bearer credentials in a proxy cache.
+    proxy_cache off;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+}
+# Keep your access_log format free of $http_authorization and request bodies.
+# Do not add CORS headers or a public unauthenticated API location.

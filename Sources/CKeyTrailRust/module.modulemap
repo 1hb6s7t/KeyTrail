@@ -1,0 +1,5 @@
+module CKeyTrailRust [system] {
+    header "keytrail.h"
+    link "keytrail_core"
+    export *
+}

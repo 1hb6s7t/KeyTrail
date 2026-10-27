@@ -1,0 +1,22 @@
+name: Windows build and aggregate tests
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['rust/**', 'web/**', 'scripts/package-windows.ps1', '.github/workflows/windows.yml']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Locked core, server and Windows normalization tests
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p keytrail-core -p keytrail-server -p keytrail-windows
+      - name: Package Windows release without launching collection
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KeyTrail-Windows-v1.2
+          path: artifacts/KeyTrail-Windows-v1.2.zip

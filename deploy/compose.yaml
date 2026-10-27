@@ -1,0 +1,22 @@
+services:
+  keytrail:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: keytrail-private:1.2
+    command: ["serve", "/state/config.json"]
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - keytrail-state:/state
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 256m
+    restart: "no"
+volumes:
+  keytrail-state:

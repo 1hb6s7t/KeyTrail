@@ -1,0 +1,61 @@
+/* Browser integration against an isolated loopback fixture, not capture acceptance.
+   NODE_PATH=<runtime>/node_modules node scripts/test-web-range-trend.js
+   KEYTRAIL_CHROMIUM_EXECUTABLE optionally selects an installed Chromium. */
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
+const {chromium,webkit}=require('playwright');
+const root=path.resolve(__dirname,'..'),out=path.join(root,'artifacts/web-range-trend'),result={synthetic:true,fixtureServer:true,realCapture:false,profiles:[],passed:false};
+const summary=(keys=0)=>({keyPresses:keys,leftClicks:keys?2:0,rightClicks:keys?1:0,middleClicks:0,mouseDistancePoints:0,scrollUnits:0,minuteCount:keys?1:0,totalActiveSeconds:keys?30:0,keyboardActiveSeconds:keys?30:0,mouseActiveSeconds:0,peakKeysPerMinute:keys,keyCounts:keys?{A:keys}:{}});
+let mode='ok',requests=[],browser;
+const server=http.createServer(async(req,res)=>{
+ if(req.url.startsWith('/api/')){
+  let body='';for await(const chunk of req)body+=chunk;const query=body?JSON.parse(body):null;requests.push({url:req.url,body:query});let value;
+  if(req.url==='/api/status')value={deviceId:'synthetic-range-fixture',replicaId:'fixture',textCursor:0,textReplicaId:'text-fixture',demoData:true,readOnly:true,lastSyncedAt:1,textEnabled:true};
+  else if(req.url==='/api/text-query')value={records:[],total:0,totalCharacters:0,nextOffset:null,hasMore:false};
+  else if(query.op==='summary')value=summary(73);
+  else if(query.op==='insights')value={intervalCount:0,intervalSumMs:0,bpm:null,burstPeak:0,burstPeakAt:null,measuredMinutes:0};
+  else if(query.op==='trend'&&mode==='error'){res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:false,error:'fixture trend failure'}));return}
+  else {value=query.ranges.map((r,i)=>({start:r.start,summary:summary(mode==='empty'?0:i+1)}));if(query.op==='trend'&&mode==='partial')value.pop();if(query.op==='trend'&&mode==='mismatched')value[0].start+=60}
+  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,result:value}));return;
+ }
+ const name=req.url==='/'?'index.html':req.url.slice(1);if(!['index.html','app.js','metrics.js','text.js','csv.js','style.css','sw.js','manifest.webmanifest'].includes(name)){res.writeHead(404);res.end();return}
+ res.writeHead(200,{'Content-Type':name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':'text/html'});res.end(fs.readFileSync(path.join(root,'web',name)));
+});
+(async()=>{try{
+ fs.mkdirSync(out,{recursive:true});await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=`http://127.0.0.1:${server.address().port}`;
+ for(const engine of[chromium,webkit]){
+  browser=await engine.launch({headless:true,...(engine===chromium&&process.env.KEYTRAIL_CHROMIUM_EXECUTABLE?{executablePath:process.env.KEYTRAIL_CHROMIUM_EXECUTABLE}:{})});
+  const context=await browser.newContext({timezoneId:'America/New_York',locale:'zh-CN',viewport:{width:390,height:844},serviceWorkers:'block'}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.clock.setFixedTime(new Date('2026-11-15T17:30:30Z'));await page.goto(origin);
+  const idle=()=>page.waitForFunction(()=>snapshot&&!busy),apply=async(start,end)=>{await page.locator('#start').fill(start);await page.locator('#end').fill(end);await page.locator('#range-form button').click();await idle()},read=()=>page.evaluate(()=>({range:snapshot.r,keys:snapshot.s.keyPresses,plan:snapshot.overviewTrend?.plan,points:snapshot.overviewTrend?.points,report:document.querySelector('#report').textContent}));
+  await page.locator('#token').fill('fixture-viewer-'.padEnd(64,'x'));await page.locator('#login-form button').click();await idle();let x=await read();assert.equal(x.plan.component,'hour');assert.equal(x.plan.cutoff,Date.parse('2026-11-15T17:30:30Z')/1000);assert.ok(x.plan.clipped);
+  await apply('2024-01-15T10:15','2025-06-20T17:45');x=await read();assert.equal(x.plan.component,'month');assert.equal(x.points.length,18);assert.equal(x.points[0].start,x.range.start);assert.equal(x.points.at(-1).end,x.range.end);
+  for(let i=1;i<x.points.length;i++)assert.equal(x.points[i-1].end,x.points[i].start);assert.equal(x.keys,73);assert.match(x.report,/按键 73 次/);
+  const longRequest=requests.filter(r=>r.body?.op==='trend').at(-1).body;assert.equal(longRequest.ranges.length,18);assert.equal(longRequest.ranges[0].start,x.range.start);assert.equal(longRequest.ranges.at(-1).end,x.range.end);
+  await page.locator('#preset').selectOption('year');await idle();x=await read();assert.equal(x.plan.component,'month');assert.equal(x.points.length,11);assert.equal(new Date(x.points[0].start*1000).getUTCMonth(),0);
+  await apply('1971-03-10T09:15','2025-06-20T17:45');x=await read();assert.equal(x.plan.component,'year');assert.equal(x.points.length,55);assert.ok(x.points.every(p=>p.end-p.start<=367*86400));
+  await apply('1971-01-01T00:00','2070-01-01T00:00');x=await read();assert.equal(x.plan.component,'year');assert.ok(x.plan.ranges.length<=100);assert.ok(x.plan.clipped);
+  await apply('2026-03-07T12:15','2026-03-12T09:45');x=await read();assert.equal(x.plan.component,'day');assert.equal(x.points.length,6);assert.ok(x.points.some(p=>p.end-p.start===23*3600));
+  await apply('2026-11-01T00:00','2026-11-01T04:00');x=await read();assert.equal(x.plan.component,'hour');assert.equal(x.points.length,4);assert.equal(x.points[1].end-x.points[1].start,7200);
+  await apply('2026-03-08T00:00','2026-03-08T04:00');x=await read();assert.equal(x.points.length,3);assert.equal(x.points.reduce((a,p)=>a+p.end-p.start,0),3*3600);
+  for(const fault of['error','partial','mismatched']){mode=fault;await page.locator('#refresh').click();await idle();assert.match(await page.locator('#overview-trend-status').textContent(),/趋势未取得/);assert.equal(await page.locator('#overview-trend-table tbody tr').count(),0);assert.equal((await read()).keys,73);assert.match((await read()).report,/按键 73 次/)}
+  mode='empty';await page.locator('#refresh').click();await idle();assert.match(await page.locator('#overview-trend-detail').textContent(),/暂无统计记录/);mode='ok';
+  const before=requests.filter(r=>r.body?.op==='trend').length;await apply('2027-01-01T00:00','2027-02-01T00:00');assert.match(await page.locator('#overview-trend-status').textContent(),/尚未开始/);assert.equal(await page.locator('#overview-trend-table tbody tr').count(),0);assert.equal(requests.filter(r=>r.body?.op==='trend').length,before);
+  await apply('2024-01-15T10:15','2025-06-20T17:45');await page.screenshot({path:path.join(out,engine.name()+'-mobile.png'),fullPage:true});await page.locator('#overview-trend-panel').screenshot({path:path.join(out,engine.name()+'-trend.png')});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+  const secret='LOCAL-KEYWORD-DO-NOT-SEND';await page.locator('#text-keyword').fill(secret);await page.locator('#text-clear').click();assert.equal(await page.locator('#text-keyword').inputValue(),'');
+  // A pending AES import is revoked by clear, and cannot silently restore a key.
+  await page.evaluate(()=>{window.originalImport=crypto.subtle.importKey.bind(crypto.subtle);crypto.subtle.importKey=async(...args)=>{const imported=await window.originalImport(...args);return new Promise(resolve=>{window.releaseImport=()=>resolve(imported)})}});
+  await page.locator('#text-key').fill(Buffer.alloc(32,1).toString('base64'));await page.locator('#text-keyword').fill(secret);await page.locator('#text-search').click();await page.waitForFunction(()=>typeof window.releaseImport==='function');await page.locator('#text-clear').click();await page.evaluate(()=>{window.releaseImport();crypto.subtle.importKey=window.originalImport});await page.waitForFunction(()=>!document.querySelector('#text-search').disabled);await page.locator('#text-search').click();await page.waitForFunction(()=>!document.querySelector('#text-search').disabled);assert.match(await page.locator('#text-status').textContent(),/请先输入查看密钥/);
+  // The old import's finally must not unlock controls or erase a newer key input.
+  await page.evaluate(()=>{window.importReleases=[];crypto.subtle.importKey=async(...args)=>{const imported=await window.originalImport(...args);return new Promise(resolve=>window.importReleases.push(()=>resolve(imported)))}});
+  await page.locator('#text-key').fill(Buffer.alloc(32,2).toString('base64'));await page.locator('#text-search').click();await page.waitForFunction(()=>window.importReleases.length===1);await page.locator('#text-clear').click();await page.locator('#text-key').fill(Buffer.alloc(32,3).toString('base64'));await page.locator('#text-search').click();await page.waitForFunction(()=>window.importReleases.length===2);await page.evaluate(()=>window.importReleases[0]());await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));assert.equal(await page.locator('#text-search').isDisabled(),true);assert.equal(await page.locator('#text-key').inputValue(),Buffer.alloc(32,3).toString('base64'));await page.evaluate(()=>{window.importReleases[1]();crypto.subtle.importKey=window.originalImport});await page.waitForFunction(()=>!document.querySelector('#text-search').disabled);assert.match(await page.locator('#text-status').textContent(),/已覆盖/);
+  // Revocation also prevents a delayed candidate page from restoring results.
+  let releaseText,startedText;const textStarted=new Promise(resolve=>startedText=resolve),textRelease=new Promise(resolve=>releaseText=resolve);await page.route('**/api/text-query',async route=>{startedText();await textRelease;await route.continue()});await page.locator('#text-search').click();await textStarted;await page.locator('#text-clear').click();releaseText();await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.unroute('**/api/text-query');assert.equal(await page.locator('#text-results .text-entry').count(),0);assert.equal(await page.locator('#text-next').isDisabled(),true);
+  await page.locator('#text-keyword').fill(secret);await page.locator('#disconnect').click();assert.equal(await page.locator('#text-keyword').inputValue(),'');
+  // A new connection clears keyword state even if the hidden text field changed after disconnect.
+  await page.evaluate(value=>{document.querySelector('#text-keyword').value=value},secret);await page.locator('#token').fill('fixture-new-viewer-'.padEnd(64,'x'));await page.locator('#login-form button').click();await idle();assert.equal(await page.locator('#text-keyword').inputValue(),'');
+  assert.ok(!JSON.stringify(requests).includes(secret));assert.ok(!await page.evaluate(secret=>JSON.stringify({...localStorage,...sessionStorage}).includes(secret),secret));assert.deepEqual(errors,[]);
+  const lord=await browser.newContext({timezoneId:'Australia/Lord_Howe',serviceWorkers:'block'}),lordPage=await lord.newPage();await lordPage.goto(origin);const special=await lordPage.evaluate(()=>{const plan=(a,b)=>KeyTrailMetrics.overviewTrendPlan(new Date(a).getTime()/1000,new Date(b).getTime()/1000,new Date(b).getTime()/1000);return{spring:plan('2026-10-04T00:00','2026-10-04T04:00'),fall:plan('2026-04-05T00:00','2026-04-05T04:00'),empty:KeyTrailMetrics.overviewTrendPlan(60,60,120)}});assert.equal(special.spring.ranges[2].end-special.spring.ranges[2].start,1800);assert.equal(special.fall.ranges[1].end-special.fall.ranges[1].start,5400);assert.equal(special.empty.ranges.length,0);await lord.close();
+  result.profiles.push({engine:engine.name(),version:browser.version(),selectedRangeLongCustomYear:true,hourDayMonthYear:true,calendarDSTAndHalfHour:true,clippedEnds:true,futureAndEmpty:true,errorPartialMismatchDoNotPoisonTotals:true,keywordClearDisconnectNewSession:true,staleKeyImportRevoked:true,noKeywordNetworkOrStorage:true,mobileOverflow:false});await browser.close();browser=null;
+ }
+ result.passed=true;
+}catch(error){result.error=String(error.stack||error);process.exitCode=1}finally{if(browser)await browser.close();server.close();fs.writeFileSync(path.join(out,'results.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result,null,2))}})();

@@ -1,0 +1,9 @@
+[workspace]
+members = ["keytrail-core", "keytrail-server", "keytrail-windows"]
+resolver = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = "debuginfo"
